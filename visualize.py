@@ -278,8 +278,11 @@ def visualize_from_model(args):
 
     print(f"Loading checkpoint weights from: {args.checkpoint}")
     state_dict = torch.load(args.checkpoint, map_location=device)
-    if "state_dict" in state_dict and isinstance(state_dict["state_dict"], dict):
-        state_dict = state_dict["state_dict"]
+    if isinstance(state_dict, dict):
+        if "model_state_dict" in state_dict and isinstance(state_dict["model_state_dict"], dict):
+            state_dict = state_dict["model_state_dict"]
+        elif "state_dict" in state_dict and isinstance(state_dict["state_dict"], dict):
+            state_dict = state_dict["state_dict"]
 
     if any("kan." in k for k in state_dict.keys()):
         use_kan = True

@@ -215,6 +215,19 @@ class UNet(nn.Module):
         self.side2 = nn.Conv2d(decoder_channels, 1, kernel_size=1)
         self.head = nn.Conv2d(decoder_channels, 1, kernel_size=1)
 
+    def freeze_encoder_bn(self) -> None:
+        """
+        Freezes running mean and running variance updates of BatchNorm2d layers
+        in both RGB and Topography encoders to maintain statistical stability
+        when training with small batch sizes (e.g., batch_size <= 8).
+        """
+        for m in self.rgb_encoder.modules():
+            if isinstance(m, nn.BatchNorm2d):
+                m.eval()
+        for m in self.topo_encoder.modules():
+            if isinstance(m, nn.BatchNorm2d):
+                m.eval()
+
     def forward(self, x, x_topo=None):
         if x_topo is None:
             if x.shape[1] > 3:
@@ -229,6 +242,8 @@ class UNet(nn.Module):
         else:
             x_rgb = x
 
+        target_hw = x_rgb.shape[-2:]
+
         # 1. Optical RGB branch
         feats_rgb = self.rgb_encoder(x_rgb)
 
@@ -242,19 +257,22 @@ class UNet(nn.Module):
         cur = fused[-1]
 
         # First upsampling step: deepest skip
+        # out1 corresponds to auxiliary deep supervision from stage (num_stages - 2)
         cur = self.up_blocks[0](cur, fused[-2])
-        out1 = F.interpolate(self.side1(cur), scale_factor=self.reductions[-2], mode='bilinear', align_corners=False)
+        out1 = F.interpolate(self.side1(cur), size=target_hw, mode='bilinear', align_corners=False)
 
         # Second upsampling step: mid skip
+        # out2 corresponds to auxiliary deep supervision from stage (num_stages - 3)
         cur = self.up_blocks[1](cur, fused[-3])
-        out2 = F.interpolate(self.side2(cur), scale_factor=self.reductions[-3], mode='bilinear', align_corners=False)
+        out2 = F.interpolate(self.side2(cur), size=target_hw, mode='bilinear', align_corners=False)
 
         # Remaining upsampling steps
         for k in range(2, self.num_stages - 1):
             cur = self.up_blocks[k](cur, fused[self.num_stages - 2 - k])
 
         # Final primary head projection
-        out = F.interpolate(self.head(cur), scale_factor=self.reductions[0], mode='bilinear', align_corners=False)
+        # out corresponds to the primary segmentation output
+        out = F.interpolate(self.head(cur), size=target_hw, mode='bilinear', align_corners=False)
 
         return out, out1, out2
 
