@@ -160,13 +160,14 @@ class FusionMode(Enum):
 class UNet(nn.Module):
     def __init__(
         self,
-        rgb_backbone: str = "convnext_tiny",
+        rgb_backbone: str = "efficientnet_b5",
         pretrained_rgb: bool = True,
-        topo_backbone: str = "convnext_tiny",
+        topo_backbone: str = "efficientnet_b5",
         topo_in_chans: int = 1,
         pretrained_topo: bool = True,
         fusion: FusionMode = FusionMode.CONCAT,
-        use_kan: bool = True
+        use_kan: bool = True,
+        decoder_channels: int = 64,
     ) -> None:
         super(UNet, self).__init__()
         self.rgb_encoder = timm.create_model(
@@ -184,31 +185,35 @@ class UNet(nn.Module):
             features_only=True,
         )
 
-        # self.rfb1 = RFB_modified(144, 64)
-        # self.rfb2 = RFB_modified(288, 64)
-        # self.rfb3 = RFB_modified(576, 64)
-        # self.rfb4 = RFB_modified(1152, 64)
+        rgb_channels = self.rgb_encoder.feature_info.channels()
+        topo_channels = self.topo_encoder.feature_info.channels()
+        self.reductions = self.rgb_encoder.feature_info.reduction()
+        self.num_stages = len(rgb_channels)
+
+        if len(topo_channels) != self.num_stages:
+            raise ValueError(
+                f"Stage count mismatch: RGB backbone '{rgb_backbone}' has {self.num_stages} stages, "
+                f"while Topo backbone '{topo_backbone}' has {len(topo_channels)} stages."
+            )
 
         if fusion == FusionMode.CONCAT:
-            self.fuse1 = ConcatSkip(192, 64)
-            self.fuse2 = ConcatSkip(384, 64)
-            self.fuse3 = ConcatSkip(768, 64)
-            self.fuse4 = ConcatSkip(1536, 64)
-
-        if use_kan:
-            self.up1 = (UpKAN(128, 64))
-            self.up2 = (UpKAN(128, 64))
-            self.up3 = (UpKAN(128, 64))
-            self.up4 = (UpKAN(128, 64))
+            self.fuses = nn.ModuleList([
+                ConcatSkip(rgb_channels[i] + topo_channels[i], decoder_channels)
+                for i in range(self.num_stages)
+            ])
         else:
-            self.up1 = (Up(128, 64))
-            self.up2 = (Up(128, 64))
-            self.up3 = (Up(128, 64))
-            self.up4 = (Up(128, 64))
+            raise NotImplementedError(f"Fusion mode {fusion} is not implemented.")
 
-        self.side1 = nn.Conv2d(64, 1, kernel_size=1)
-        self.side2 = nn.Conv2d(64, 1, kernel_size=1)
-        self.head = nn.Conv2d(64, 1, kernel_size=1)
+        UpBlock = UpKAN if use_kan else Up
+        # Decoder performs (num_stages - 1) upsampling operations
+        self.up_blocks = nn.ModuleList([
+            UpBlock(2 * decoder_channels, decoder_channels)
+            for _ in range(self.num_stages - 1)
+        ])
+
+        self.side1 = nn.Conv2d(decoder_channels, 1, kernel_size=1)
+        self.side2 = nn.Conv2d(decoder_channels, 1, kernel_size=1)
+        self.head = nn.Conv2d(decoder_channels, 1, kernel_size=1)
 
     def forward(self, x, x_topo=None):
         if x_topo is None:
@@ -224,31 +229,40 @@ class UNet(nn.Module):
         else:
             x_rgb = x
 
-        # 1. Optical RGB branch (timm ConvNeXt) (96, 192, 384, 768)
-        x1, x2, x3, x4 = self.rgb_encoder(x_rgb)
+        # 1. Optical RGB branch
+        feats_rgb = self.rgb_encoder(x_rgb)
 
-        # 2. Topography branch (timm ConvNeXt) (96, 192, 384, 768)
-        t1, t2, t3, t4 = self.topo_encoder(x_topo)
+        # 2. Topography branch
+        feats_topo = self.topo_encoder(x_topo)
 
-        # x1, x2, x3, x4 = self.rfb1(x1), self.rfb2(x2), self.rfb3(x3), self.rfb4(x4)
-        x1 = self.fuse1(x1, t1)
-        x2 = self.fuse2(x2, t2)
-        x3 = self.fuse3(x3, t3)
-        x4 = self.fuse4(x4, t4)
+        # 3. Multi-scale feature fusion
+        fused = [self.fuses[i](feats_rgb[i], feats_topo[i]) for i in range(self.num_stages)]
 
-        x = self.up1(x4, x3)
-        out1 = F.interpolate(self.side1(x), scale_factor=16, mode='bilinear')
-        x = self.up2(x, x2)
-        out2 = F.interpolate(self.side2(x), scale_factor=8, mode='bilinear')
-        x = self.up3(x, x1)
-        out = F.interpolate(self.head(x), scale_factor=4, mode='bilinear')
+        # 4. Decoder traversal from deepest level up to coarsest
+        cur = fused[-1]
+
+        # First upsampling step: deepest skip
+        cur = self.up_blocks[0](cur, fused[-2])
+        out1 = F.interpolate(self.side1(cur), scale_factor=self.reductions[-2], mode='bilinear', align_corners=False)
+
+        # Second upsampling step: mid skip
+        cur = self.up_blocks[1](cur, fused[-3])
+        out2 = F.interpolate(self.side2(cur), scale_factor=self.reductions[-3], mode='bilinear', align_corners=False)
+
+        # Remaining upsampling steps
+        for k in range(2, self.num_stages - 1):
+            cur = self.up_blocks[k](cur, fused[self.num_stages - 2 - k])
+
+        # Final primary head projection
+        out = F.interpolate(self.head(cur), scale_factor=self.reductions[0], mode='bilinear', align_corners=False)
+
         return out, out1, out2
 
 
 if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
     with torch.no_grad():
-        model = UNet(pretrained_topo=False).to(device)
-        x = torch.randn(1, 4, 512, 512).to(device)
+        model = UNet(rgb_backbone="efficientnet_b5", topo_backbone="efficientnet_b5", pretrained_rgb=False, pretrained_topo=False).to(device)
+        x = torch.randn(1, 4, 128, 128).to(device)
         out, out1, out2 = model(x)
-        print("Single tensor forward outputs:", out.shape, out1.shape, out2.shape)
+        print("EfficientNet-B5 UNet forward outputs:", out.shape, out1.shape, out2.shape)

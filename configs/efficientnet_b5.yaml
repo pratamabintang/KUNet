@@ -1,0 +1,36 @@
+# Configuration for Landslide Segmentation (Dual EfficientNet-B5 RGB + Topo with KAN Decoder)
+
+experiment:
+  name: "dual_efficientnet_b5"
+  seed: 42
+  runs_dir: "runs"
+
+dataset:
+  data_dir: "datasets/landslide"
+  modalities:
+    - "IMAGE"
+    - "DTM"
+  blacklist_path: "datasets/landslide/black_list.txt"
+  size: 512
+  batch_size: 4
+  num_workers: 4
+
+model:
+  rgb_backbone: "efficientnet_b5"
+  pretrained_rgb: true
+  topo_backbone: "efficientnet_b5"
+  pretrained_topo: true
+  fusion_mode: "concat"
+  use_kan: true
+
+training:
+  epochs: 50
+  lr: 0.0001
+  weight_decay: 0.0005
+  min_lr: 1.0e-7
+  save_interval: 5
+  eval_interval: 1
+  amp: true
+  amp_dtype: "auto"
+  grad_accum_steps: 1
+  grad_clip: 1.0

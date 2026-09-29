@@ -260,9 +260,9 @@ def main():
     logger.info(f"Derived Topography Input Channels: {topo_in_chans}")
 
     m_cfg = config["model"]
-    rgb_backbone = m_cfg.get("rgb_backbone", "convnext_tiny")
+    rgb_backbone = m_cfg.get("rgb_backbone", "efficientnet_b5")
     pretrained_rgb = m_cfg.get("pretrained_rgb", True)
-    topo_backbone = m_cfg.get("topo_backbone", "convnext_tiny")
+    topo_backbone = m_cfg.get("topo_backbone", "efficientnet_b5")
     pretrained_topo = m_cfg.get("pretrained_topo", True)
     fusion_mode_str = m_cfg.get("fusion_mode", "concat")
     fusion_mode = FusionMode(fusion_mode_str.lower())

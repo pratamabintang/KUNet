@@ -270,8 +270,8 @@ def visualize_from_model(args):
 
     topo_in_chans = sum(1 for m in modalities if m != "IMAGE")
     m_cfg = config.get("model", {})
-    rgb_backbone = m_cfg.get("rgb_backbone", "convnext_tiny")
-    topo_backbone = m_cfg.get("topo_backbone", "convnext_tiny")
+    rgb_backbone = m_cfg.get("rgb_backbone", "efficientnet_b5")
+    topo_backbone = m_cfg.get("topo_backbone", "efficientnet_b5")
     fusion_mode_str = m_cfg.get("fusion_mode", "concat")
     fusion_mode = FusionMode(fusion_mode_str.lower())
     use_kan = m_cfg.get("use_kan", True)
