@@ -1,0 +1,12 @@
+*.sh
+*.md
+*.pth
+*.pt
+datasets/*
+runs/
+docs/*
+!docs/adr/
+.agents/
+skills-lock.json
+!README.md
+__pycache__/

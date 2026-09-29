@@ -1,0 +1,11 @@
+-f https://download.pytorch.org/whl/cu121
+torch~=2.4.0
+torchvision
+timm
+tqdm>=4.65.2
+numpy
+Pillow
+opencv-python
+scikit-learn
+pyyaml
+matplotlib
