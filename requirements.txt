@@ -1,5 +1,4 @@
--f https://download.pytorch.org/whl/cu121
-torch~=2.4.0
+torch>=2.2.0
 torchvision
 timm
 tqdm>=4.65.2
