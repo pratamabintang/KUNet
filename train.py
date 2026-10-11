@@ -76,10 +76,13 @@ def parse_args():
 def structure_loss(pred: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     """
     Calculates weighted binary cross-entropy and weighted IoU loss.
-    pred: Raw logits [B, 1, H, W]
-    mask: Binary ground truth [B, 1, H, W], values in {0.0, 1.0}
+    Always operates in float32 to prevent float16 overflow on 512x512 spatial sums
+    (262,144 pixels strictly exceeds float16 maximum finite value of 65,504).
     """
-    weit = 1 + 5 * torch.abs(F.avg_pool2d(mask, kernel_size=31, stride=1, padding=15) - mask)
+    pred = pred.float()
+    mask = mask.float()
+
+    weit = 1.0 + 5.0 * torch.abs(F.avg_pool2d(mask, kernel_size=31, stride=1, padding=15) - mask)
     wbce = F.binary_cross_entropy_with_logits(pred, mask, reduction='none')
     wbce = (weit * wbce).sum(dim=(2, 3)) / (weit.sum(dim=(2, 3)) + 1e-7)
 
@@ -127,12 +130,12 @@ def evaluate(
                 enabled=amp_enabled,
             ):
                 out, out1, out2 = model(image)
-                # Primary head loss
-                loss_main = structure_loss(out, target)
-                # Auxiliary supervision losses (weighted to avoid dominating main gradients)
-                loss_aux1 = structure_loss(out1, target)
-                loss_aux2 = structure_loss(out2, target)
-                loss = loss_main + (aux1_weight * loss_aux1) + (aux2_weight * loss_aux2)
+
+            # Compute validation losses in float32 for complete numerical stability
+            loss_main = structure_loss(out, target)
+            loss_aux1 = structure_loss(out1, target)
+            loss_aux2 = structure_loss(out2, target)
+            loss = loss_main + (aux1_weight * loss_aux1) + (aux2_weight * loss_aux2)
 
             total_main_loss += loss_main.item()
             total_aux1_loss += loss_aux1.item()
@@ -445,12 +448,12 @@ def main():
                 enabled=amp_enabled,
             ):
                 out, out1, out2 = model(image)
-                # Primary head loss (weight = 1.0)
-                loss_main = structure_loss(out, target)
-                # Auxiliary head losses
-                loss_aux1 = structure_loss(out1, target)
-                loss_aux2 = structure_loss(out2, target)
-                loss = loss_main + (aux1_weight * loss_aux1) + (aux2_weight * loss_aux2)
+
+            # Compute losses in float32 for complete numerical stability under AMP
+            loss_main = structure_loss(out, target)
+            loss_aux1 = structure_loss(out1, target)
+            loss_aux2 = structure_loss(out2, target)
+            loss = loss_main + (aux1_weight * loss_aux1) + (aux2_weight * loss_aux2)
 
             group_start = (i // grad_accum_steps) * grad_accum_steps
             group_size = min(grad_accum_steps, len(train_loader) - group_start)
